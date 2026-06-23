@@ -40,7 +40,7 @@ export function Table<T>({
               onClick={() => onRowClick?.(row)}
               className={cn(
                 "border-b transition-colors",
-                onRowClick && "cursor-pointer hover:bg-white/[0.01] animationDelay: `${i * 40}ms`"
+                onRowClick && "cursor-pointer hover:bg-white/1 animationDelay: `${i * 40}ms`"
               )}
                >
               {columns.map(col => (

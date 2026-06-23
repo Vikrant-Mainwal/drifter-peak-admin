@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { Menu, LogOut } from "lucide-react";
 import { ADMIN_SIDEBAR_MENU } from "../../types/admin.types";
+import Link from "next/link";
 
 interface AdminHeaderProps {
   onMenuClick: () => void;
@@ -14,7 +15,7 @@ export function AdminHeader({ onMenuClick }: AdminHeaderProps) {
   const current = ADMIN_SIDEBAR_MENU.find((item) =>
     item.path === "/admin"
       ? pathname === "/admin"
-      : pathname.startsWith(item.path)
+      : pathname.startsWith(item.path),
   );
 
   const pageTitle = current?.name ?? "Dashboard";
@@ -24,7 +25,7 @@ export function AdminHeader({ onMenuClick }: AdminHeaderProps) {
   };
 
   return (
-    <header className="flex shrink-0 items-center justify-between border-b bg-white px-6 py-4">
+    <header className="flex shrink-0 items-center justify-between border-neutral-200 border-b bg-white px-6 py-4 sticky top-0">
       {/* Left */}
       <div className="flex items-center gap-4">
         {/* Mobile menu */}
@@ -48,14 +49,12 @@ export function AdminHeader({ onMenuClick }: AdminHeaderProps) {
             ADMIN
           </p>
 
-          <p className="font-mono text-[10px] text-black">
-            Admin
-          </p>
+          <p className="font-mono text-[10px] text-black">Admin</p>
         </div>
 
         {/* Avatar */}
         <div className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-300 bg-gray-100 font-mono text-xs text-black">
-          A
+          <Link href="/profile">A</Link>
         </div>
 
         {/* Logout */}
@@ -65,9 +64,7 @@ export function AdminHeader({ onMenuClick }: AdminHeaderProps) {
         >
           <LogOut size={13} />
 
-          <span className="hidden md:inline">
-            LOGOUT
-          </span>
+          <span className="hidden md:inline">LOGOUT</span>
         </button>
       </div>
     </header>

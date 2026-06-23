@@ -1,5 +1,4 @@
 "use client";
-
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
@@ -173,7 +172,6 @@ export function ProductTable({
   return (
     <>
       {/* Top section */}
-
       <div className="mb-5 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
         <div className="relative w-full sm:w-72">
           <Search
