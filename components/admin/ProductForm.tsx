@@ -79,15 +79,10 @@ export interface ProductFormProps {
   removeVariantRow: (i: number) => void;
   updateVariantRow: (i: number, field: keyof VariantRow, value: string) => void;
 
-  // Add to ProductFormProps interface
-  existingImages?: { id: string; url: string }[];
-  onRemoveExistingImage?: (id: string) => Promise<void>;
-  onReorderExistingImages?: (images: { id: string; url: string }[]) => void;
-
-  // Media
-  setImageFiles: (files: File[]) => void;
+  // Media — single ordered list, mixed images + videos
+  mediaItems: MediaItem[];
+  setMediaItems: (items: MediaItem[]) => void;
   setSizeChartFile: (file: File | null) => void;
-  setVideoFiles: (files: File[]) => void;
 
   // Submit
   handleSubmit: () => void;
@@ -97,13 +92,21 @@ export interface ProductFormProps {
   mode?: "add" | "edit";
 }
 
+// media data shape
+export type MediaType = "image" | "video";
+
+export type MediaItem =
+  | { kind: "existing"; id: string; url: string; type: MediaType }
+  | { kind: "new"; tempId: string; file: File; type: MediaType; preview: string };
+
+
 // Shared style tokens
 
 const fieldInput =
   "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-gray-900 transition-colors text-black placeholder:text-gray-400";
 
 const fieldLabel =
-  "block text-[11px] font-mono tracking-widest text-gray-400 uppercase mb-1";
+  "block text-[14px] font-mono tracking-widest text-gray-600 uppercase mb-1";
 
 //  Mobile step config
 
@@ -560,84 +563,49 @@ function VariantsSection(
 }
 
 function MediaSection(
-  props: Pick<
-    ProductFormProps,
-    | "setImageFiles"
-    | "setSizeChartFile"
-    | "setVideoFiles"
-    | "existingImages"
-    | "onRemoveExistingImage"
-    | "onReorderExistingImages"
-  >,
+  props: Pick<ProductFormProps, "mediaItems" | "setMediaItems" | "setSizeChartFile">,
 ) {
-  const [newImagePreviews, setNewImagePreviews] = useState<
-    { file: File; preview: string }[]
-  >([]);
-  const [videoPreviews, setVideoPreviews] = useState<
-    { file: File; preview: string }[]
-  >([]);
+  const { mediaItems, setMediaItems } = props;
+
   const [chartPreview, setChartPreview] = useState<string>("");
   const [chartName, setChartName] = useState<string>("");
 
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const videoInputRef = useRef<HTMLInputElement>(null);
+  const mediaInputRef = useRef<HTMLInputElement>(null);
   const chartInputRef = useRef<HTMLInputElement>(null);
 
-  // Drag state
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
-  const [dragSource, setDragSource] = useState<"existing" | "new" | null>(null);
 
-  function handleNewImages(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleNewMedia(e: React.ChangeEvent<HTMLInputElement>) {
     const incoming = Array.from(e.target.files ?? []);
     if (!incoming.length) return;
 
-    const next = [
-      ...newImagePreviews,
-      ...incoming.map((file) => ({ file, preview: URL.createObjectURL(file) })),
-    ];
-    setNewImagePreviews(next);
-    props.setImageFiles(next.map((p) => p.file)); // outside any updater
+    const newItems: MediaItem[] = incoming.map((file) => ({
+      kind: "new",
+      tempId: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
+      file,
+      type: file.type.startsWith("video") ? "video" : "image",
+      preview: URL.createObjectURL(file),
+    }));
+
+    setMediaItems([...mediaItems, ...newItems]);
     e.target.value = "";
   }
 
-  function handleVideos(e: React.ChangeEvent<HTMLInputElement>) {
-    const incoming = Array.from(e.target.files ?? []);
-    if (!incoming.length) return;
-
-    const next = [
-      ...videoPreviews,
-      ...incoming.map((file) => ({ file, preview: URL.createObjectURL(file) })),
-    ];
-    setVideoPreviews(next);
-    props.setVideoFiles(next.map((p) => p.file)); // outside
-    e.target.value = "";
+  function removeMedia(index: number) {
+    const item = mediaItems[index];
+    if (item.kind === "new") URL.revokeObjectURL(item.preview);
+    setMediaItems(mediaItems.filter((_, i) => i !== index));
   }
 
-  function removeNewImage(index: number) {
-    URL.revokeObjectURL(newImagePreviews[index].preview);
-    const next = newImagePreviews.filter((_, i) => i !== index);
-    setNewImagePreviews(next);
-    props.setImageFiles(next.map((p) => p.file)); // outside
-  }
-
-  function removeNewVideo(index: number) {
-    URL.revokeObjectURL(videoPreviews[index].preview);
-    const next = videoPreviews.filter((_, i) => i !== index);
-    setVideoPreviews(next);
-    props.setVideoFiles(next.map((p) => p.file)); // outside
-  }
-
-  function onNewDrop(i: number) {
-    if (dragIndex === null || dragSource !== "new") return;
-    const next = [...newImagePreviews];
+  function onDrop(i: number) {
+    if (dragIndex === null) return;
+    const next = [...mediaItems];
     const [moved] = next.splice(dragIndex, 1);
     next.splice(i, 0, moved);
-    setNewImagePreviews(next);
-    props.setImageFiles(next.map((p) => p.file)); // outside
+    setMediaItems(next);
     setDragIndex(null);
     setDragOver(null);
-    setDragSource(null);
   }
 
   function handleSizeChart(e: React.ChangeEvent<HTMLInputElement>) {
@@ -648,165 +616,105 @@ function MediaSection(
     e.target.value = "";
   }
 
-  // Drag handlers for existing images
-  function onExistingDragStart(i: number) {
-    setDragIndex(i);
-    setDragSource("existing");
-  }
-  function onExistingDragOver(e: React.DragEvent, i: number) {
-    e.preventDefault();
-    setDragOver(i);
-  }
-  function onExistingDrop(i: number) {
-    if (dragIndex === null || dragSource !== "existing") return;
-    const imgs = [...(props.existingImages ?? [])];
-    const [moved] = imgs.splice(dragIndex, 1);
-    imgs.splice(i, 0, moved);
-    props.onReorderExistingImages?.(imgs);
-    setDragIndex(null);
-    setDragOver(null);
-    setDragSource(null);
-  }
-
-  // Drag handlers for new images
-  function onNewDragStart(i: number) {
-    setDragIndex(i);
-    setDragSource("new");
-  }
-  function onNewDragOver(e: React.DragEvent, i: number) {
-    e.preventDefault();
-    setDragOver(i);
-  }
-
   return (
     <div className="space-y-6">
-      {/* Existing images (edit mode)  */}
-      {props.existingImages && props.existingImages.length > 0 && (
-        <div>
-          <label className={fieldLabel}>
-            Current Images
-            <span className="normal-case tracking-normal ml-1 text-gray-300">
-              (drag to reorder)
-            </span>
-          </label>
-          <div className="flex flex-wrap gap-3">
-            {props.existingImages.map((img, i) => (
-              <div
-                key={img.id}
-                draggable
-                onDragStart={() => onExistingDragStart(i)}
-                onDragOver={(e) => onExistingDragOver(e, i)}
-                onDrop={() => onExistingDrop(i)}
-                onDragEnd={() => {
-                  setDragIndex(null);
-                  setDragOver(null);
-                }}
-                className={cn(
-                  "relative group w-24 h-24 rounded-xl overflow-hidden border-2 cursor-grab active:cursor-grabbing transition-all duration-150",
-                  dragOver === i && dragSource === "existing"
-                    ? "border-gray-900 scale-105"
-                    : "border-gray-200",
-                )}
-              >
-                <img
-                  src={img.url}
-                  alt=""
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-mono rounded px-1 leading-4">
-                  {i + 1}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => props.onRemoveExistingImage?.(img.id)}
-                  className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <X size={10} />
-                </button>
-                <div className="absolute inset-x-0 bottom-0 bg-black/40 text-white text-[9px] font-mono text-center py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  DRAG
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Product images */}
+      {/* Unified media */}
       <div>
         <label className={fieldLabel}>
-          {props.existingImages?.length ? "Add More Images" : "Product Images"}
+          Media
+          <span className="normal-case tracking-normal ml-1 text-gray-300">
+            (drag to reorder — this order is shown to customers)
+          </span>
         </label>
 
-        {/* Button instead of label wrapper — fixes mobile */}
         <button
           type="button"
-          onClick={() => imageInputRef.current?.click()}
+          onClick={() => mediaInputRef.current?.click()}
           className="w-full flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl p-5 hover:border-gray-400 transition-colors text-center gap-2 mb-3"
         >
           <Upload size={18} className="text-gray-300" />
           <span className="text-xs text-gray-400 font-mono tracking-wide">
-            Tap to add images · JPG, PNG, WEBP
+            Tap to add photos & videos · JPG, PNG, WEBP, MP4, MOV
           </span>
           <span className="text-[10px] text-gray-300 font-mono">
             Multiple picks accumulate
           </span>
         </button>
-        {/* Hidden input, NOT inside a label */}
         <input
-          ref={imageInputRef}
+          ref={mediaInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,video/*"
           multiple
-          onChange={handleNewImages}
+          onChange={handleNewMedia}
           className="hidden"
         />
 
-        {newImagePreviews.length > 0 && (
-          <div className="flex flex-wrap gap-3 mt-2">
-            {newImagePreviews.map((item, i) => (
-              <div
-                key={i}
-                draggable
-                onDragStart={() => onNewDragStart(i)}
-                onDragOver={(e) => onNewDragOver(e, i)}
-                onDrop={() => onNewDrop(i)}
-                onDragEnd={() => {
-                  setDragIndex(null);
-                  setDragOver(null);
-                }}
-                className={cn(
-                  "relative group w-24 h-24 rounded-xl overflow-hidden border-2 cursor-grab active:cursor-grabbing transition-all duration-150",
-                  dragOver === i && dragSource === "new"
-                    ? "border-gray-900 scale-105"
-                    : "border-gray-200",
-                )}
-              >
-                <img
-                  src={item.preview}
-                  alt=""
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-mono rounded px-1 leading-4">
-                  {i + 1}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeNewImage(i)}
-                  className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+        {mediaItems.length > 0 && (
+          <div className="flex flex-wrap gap-3">
+            {mediaItems.map((item, i) => {
+              const src = item.kind === "existing" ? item.url : item.preview;
+              return (
+                <div
+                  key={item.kind === "existing" ? item.id : item.tempId}
+                  draggable
+                  onDragStart={() => setDragIndex(i)}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(i);
+                  }}
+                  onDrop={() => onDrop(i)}
+                  onDragEnd={() => {
+                    setDragIndex(null);
+                    setDragOver(null);
+                  }}
+                  className={cn(
+                    "relative group w-24 h-24 rounded-xl overflow-hidden border-2 cursor-grab active:cursor-grabbing transition-all duration-150 bg-gray-50",
+                    dragOver === i ? "border-gray-900 scale-105" : "border-gray-200",
+                  )}
                 >
-                  <X size={10} />
-                </button>
-                <div className="absolute inset-x-0 bottom-0 bg-black/40 text-white text-[9px] font-mono text-center py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  DRAG
+                  {item.type === "video" ? (
+                    <video
+                      src={src}
+                      className="w-full h-full object-cover"
+                      muted
+                      playsInline
+                      onMouseEnter={(e) => (e.currentTarget as HTMLVideoElement).play()}
+                      onMouseLeave={(e) => {
+                        const v = e.currentTarget as HTMLVideoElement;
+                        v.pause();
+                        v.currentTime = 0;
+                      }}
+                    />
+                  ) : (
+                    <img src={src} alt="" className="w-full h-full object-cover" />
+                  )}
+
+                  <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-mono rounded px-1 leading-4">
+                    {i + 1}
+                  </div>
+                  {item.type === "video" && (
+                    <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[9px] font-mono rounded px-1 leading-4">
+                      VIDEO
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeMedia(i)}
+                    className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <X size={10} />
+                  </button>
+                  <div className="absolute inset-x-0 bottom-0 bg-black/40 text-white text-[9px] font-mono text-center py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    DRAG
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* Size chart  */}
+      {/* Size chart — unchanged, stays separate since it's not part of the gallery */}
       <div>
         <label className={fieldLabel}>Size Chart</label>
         <button
@@ -815,11 +723,7 @@ function MediaSection(
           className="w-full flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl p-5 hover:border-gray-400 transition-colors text-center gap-2"
         >
           {chartPreview ? (
-            <img
-              src={chartPreview}
-              alt="Size chart"
-              className="max-h-32 object-contain rounded"
-            />
+            <img src={chartPreview} alt="Size chart" className="max-h-32 object-contain rounded" />
           ) : (
             <>
               <Upload size={18} className="text-gray-300" />
@@ -848,65 +752,6 @@ function MediaSection(
           >
             Remove size chart
           </button>
-        )}
-      </div>
-
-      {/* Videos  */}
-      <div>
-        <label className={fieldLabel}>Product Videos</label>
-        <button
-          type="button"
-          onClick={() => videoInputRef.current?.click()}
-          className="w-full flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl p-5 hover:border-gray-400 transition-colors text-center gap-2 mb-3"
-        >
-          <Upload size={18} className="text-gray-300" />
-          <span className="text-xs text-gray-400 font-mono tracking-wide">
-            Tap to add videos · MP4, MOV — optional
-          </span>
-        </button>
-        <input
-          ref={videoInputRef}
-          type="file"
-          accept="video/*"
-          multiple
-          onChange={handleVideos}
-          className="hidden"
-        />
-
-        {videoPreviews.length > 0 && (
-          <div className="flex flex-wrap gap-3 mt-2">
-            {videoPreviews.map((item, i) => (
-              <div
-                key={i}
-                className="relative group w-24 h-24 rounded-xl overflow-hidden border-2 border-gray-200 bg-gray-50"
-              >
-                <video
-                  src={item.preview}
-                  className="w-full h-full object-cover"
-                  muted
-                  playsInline
-                  onMouseEnter={(e) =>
-                    (e.currentTarget as HTMLVideoElement).play()
-                  }
-                  onMouseLeave={(e) => {
-                    const v = e.currentTarget as HTMLVideoElement;
-                    v.pause();
-                    v.currentTime = 0;
-                  }}
-                />
-                <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-mono rounded px-1 leading-4">
-                  {i + 1}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeNewVideo(i)}
-                  className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <X size={10} />
-                </button>
-              </div>
-            ))}
-          </div>
         )}
       </div>
     </div>

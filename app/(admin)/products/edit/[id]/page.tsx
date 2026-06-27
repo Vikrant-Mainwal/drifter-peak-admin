@@ -4,7 +4,11 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "../../../../../lib/supabase/client";
 import { ProductForm } from "../../../../../components/admin/ProductForm";
-import type { SpecRow, VariantRow } from "../../../../../components/admin/ProductForm";
+import type {
+  SpecRow,
+  VariantRow,
+  MediaItem,
+} from "../../../../../components/admin/ProductForm";
 
 export default function EditProductPage({
   params,
@@ -48,11 +52,9 @@ export default function EditProductPage({
   const [specs, setSpecs] = useState<SpecRow[]>([{ label: "", value: "" }]);
   const [variants, setVariants] = useState<VariantRow[]>([]);
 
-  // Media
-  const [existingImages, setExistingImages] = useState<{ id: string; url: string }[]>([]);
-  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  // Media — single ordered list, mixed images + videos
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [sizeChartFile, setSizeChartFile] = useState<File | null>(null);
-  const [videoFiles, setVideoFiles] = useState<File[]>([]);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -62,7 +64,9 @@ export default function EditProductPage({
   }, []);
 
   async function checkAdminThenLoad() {
-    const { data: { user } } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     if (!user) return router.push("/login");
 
     const { data: profile } = await supabase
@@ -130,17 +134,25 @@ export default function EditProductPage({
         sku: v.sku ?? "",
         stock: String(v.stock),
         price: v.price ? String(v.price) : "",
-      }))
+      })),
     );
 
-    // ✅ Load existing images
+    // Load existing images + videos together, in saved order
     const { data: mediaData } = await supabase
       .from("product_media")
-      .select("id, url, media_type")
+      .select("id, url, media_type, sort_order")
       .eq("product_id", id)
-      .eq("media_type", "image");
+      .in("media_type", ["image", "video"])
+      .order("sort_order", { ascending: true });
 
-    setExistingImages((mediaData ?? []).map((m) => ({ id: m.id, url: m.url })));
+    setMediaItems(
+      (mediaData ?? []).map((m) => ({
+        kind: "existing" as const,
+        id: m.id,
+        url: m.url,
+        type: m.media_type as "image" | "video",
+      })),
+    );
 
     setLoadingProduct(false);
   }
@@ -151,8 +163,12 @@ export default function EditProductPage({
     updated[i][field] = value;
     setSpecs(updated);
   }
-  function addSpecRow() { setSpecs([...specs, { label: "", value: "" }]); }
-  function removeSpecRow(i: number) { setSpecs(specs.filter((_, idx) => idx !== i)); }
+  function addSpecRow() {
+    setSpecs([...specs, { label: "", value: "" }]);
+  }
+  function removeSpecRow(i: number) {
+    setSpecs(specs.filter((_, idx) => idx !== i));
+  }
 
   // Variant helpers
   function updateVariantRow(i: number, field: keyof VariantRow, value: string) {
@@ -161,9 +177,14 @@ export default function EditProductPage({
     setVariants(updated);
   }
   function addVariantRow() {
-    setVariants([...variants, { color: "", size: "", sku: "", stock: "", price: "" }]);
+    setVariants([
+      ...variants,
+      { color: "", size: "", sku: "", stock: "", price: "" },
+    ]);
   }
-  function removeVariantRow(i: number) { setVariants(variants.filter((_, idx) => idx !== i)); }
+  function removeVariantRow(i: number) {
+    setVariants(variants.filter((_, idx) => idx !== i));
+  }
 
   async function handleSubmit() {
     setError("");
@@ -200,9 +221,21 @@ export default function EditProductPage({
         selling_price: parseFloat(sellingPrice),
         is_returnable: isReturnable,
         is_exchangeable: isExchangeable,
-        exchange_window_days: isExchangeable ? parseInt(exchangeWindowDays || "0", 10) : null,
-        tags: tags ? tags.split(",").map((t) => t.trim()).filter(Boolean) : null,
-        keywords: keywords ? keywords.split(",").map((k) => k.trim()).filter(Boolean) : null,
+        exchange_window_days: isExchangeable
+          ? parseInt(exchangeWindowDays || "0", 10)
+          : null,
+        tags: tags
+          ? tags
+              .split(",")
+              .map((t) => t.trim())
+              .filter(Boolean)
+          : null,
+        keywords: keywords
+          ? keywords
+              .split(",")
+              .map((k) => k.trim())
+              .filter(Boolean)
+          : null,
       })
       .eq("id", id);
 
@@ -223,58 +256,69 @@ export default function EditProductPage({
         price: v.price ? parseFloat(v.price) : null,
       };
       if ((v as any).id) {
-        await supabase.from("product_variants").update(payload).eq("id", (v as any).id);
+        await supabase
+          .from("product_variants")
+          .update(payload)
+          .eq("id", (v as any).id);
       } else {
         await supabase.from("product_variants").insert(payload);
       }
     }
 
-    // 3. Upload new images
-    for (const file of imageFiles) {
-      const filePath = `${id}/${Date.now()}_${file.name}`;
+    // 3. Resolve media: upload any new files, keep existing urls, preserve order
+    const resolvedMedia: { url: string; media_type: "image" | "video"; sort_order: number }[] = [];
+
+    for (let i = 0; i < mediaItems.length; i++) {
+      const item = mediaItems[i];
+
+      if (item.kind === "existing") {
+        resolvedMedia.push({ url: item.url, media_type: item.type, sort_order: i });
+        continue;
+      }
+
+      const filePath = `${id}/${item.type}_${Date.now()}_${item.file.name}`;
       const { error: uploadError } = await supabase.storage
         .from("products")
-        .upload(filePath, file);
+        .upload(filePath, item.file);
       if (uploadError) continue;
 
       const { data: urlData } = supabase.storage.from("products").getPublicUrl(filePath);
-      await supabase.from("product_media").insert({
-        product_id: id,
-        media_type: "image",
-        url: urlData.publicUrl,
-      });
+      resolvedMedia.push({ url: urlData.publicUrl, media_type: item.type, sort_order: i });
+    }
+
+    await supabase
+      .from("product_media")
+      .delete()
+      .eq("product_id", id)
+      .in("media_type", ["image", "video"]);
+
+    if (resolvedMedia.length > 0) {
+      await supabase.from("product_media").insert(
+        resolvedMedia.map((m) => ({
+          product_id: id,
+          media_type: m.media_type,
+          url: m.url,
+          sort_order: m.sort_order,
+        })),
+      );
     }
 
     // 4. Upload size chart if provided
+    // 4. Upload size chart if a new one was provided
     if (sizeChartFile) {
       const filePath = `${id}/size_chart_${Date.now()}_${sizeChartFile.name}`;
       const { error: uploadError } = await supabase.storage
         .from("products")
         .upload(filePath, sizeChartFile);
       if (!uploadError) {
-        const { data: urlData } = supabase.storage.from("products").getPublicUrl(filePath);
-        await supabase.from("products").insert({
-          product_id: id,
-          media_type: "size_chart",
-          url: urlData.publicUrl,
-        });
+        const { data: urlData } = supabase.storage
+          .from("products")
+          .getPublicUrl(filePath);
+        await supabase
+          .from("products")
+          .update({ size_chart_url: urlData.publicUrl })
+          .eq("id", id);
       }
-    }
-
-    // 5. Upload videos
-    for (const file of videoFiles) {
-      const filePath = `${id}/video_${Date.now()}_${file.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from("products")
-        .upload(filePath, file);
-      if (uploadError) continue;
-
-      const { data: urlData } = supabase.storage.from("products").getPublicUrl(filePath);
-      await supabase.from("product_media").insert({
-        product_id: id,
-        media_type: "video",
-        url: urlData.publicUrl,
-      });
     }
 
     setSaving(false);
@@ -289,41 +333,55 @@ export default function EditProductPage({
   return (
     <ProductForm
       // Basic info
-      listTitle={listTitle} setListTitle={setListTitle}
-      detailTitle={detailTitle} setDetailTitle={setDetailTitle}
-      slogan={slogan} setSlogan={setSlogan}
-      description={description} setDescription={setDescription}
-      brand={brand} setBrand={setBrand}
+      listTitle={listTitle}
+      setListTitle={setListTitle}
+      detailTitle={detailTitle}
+      setDetailTitle={setDetailTitle}
+      slogan={slogan}
+      setSlogan={setSlogan}
+      description={description}
+      setDescription={setDescription}
+      brand={brand}
+      setBrand={setBrand}
       // Categorisation
-      gender={gender} setGender={setGender}
-      category={category} setCategory={setCategory}
-      subcategory={subcategory} setSubcategory={setSubcategory}
+      gender={gender}
+      setGender={setGender}
+      category={category}
+      setCategory={setCategory}
+      subcategory={subcategory}
+      setSubcategory={setSubcategory}
       // Pricing
-      mrp={mrp} setMrp={setMrp}
-      sellingPrice={sellingPrice} setSellingPrice={setSellingPrice}
+      mrp={mrp}
+      setMrp={setMrp}
+      sellingPrice={sellingPrice}
+      setSellingPrice={setSellingPrice}
       // Policies
-      isReturnable={isReturnable} setIsReturnable={setIsReturnable}
-      isExchangeable={isExchangeable} setIsExchangeable={setIsExchangeable}
-      exchangeWindowDays={exchangeWindowDays} setExchangeWindowDays={setExchangeWindowDays}
+      isReturnable={isReturnable}
+      setIsReturnable={setIsReturnable}
+      isExchangeable={isExchangeable}
+      setIsExchangeable={setIsExchangeable}
+      exchangeWindowDays={exchangeWindowDays}
+      setExchangeWindowDays={setExchangeWindowDays}
       // Tags
-      tags={tags} setTags={setTags}
-      keywords={keywords} setKeywords={setKeywords}
+      tags={tags}
+      setTags={setTags}
+      keywords={keywords}
+      setKeywords={setKeywords}
       // Specs
       specs={specs}
-      addSpecRow={addSpecRow} removeSpecRow={removeSpecRow} updateSpecRow={updateSpecRow}
+      addSpecRow={addSpecRow}
+      removeSpecRow={removeSpecRow}
+      updateSpecRow={updateSpecRow}
       // Variants
       variants={variants}
-      addVariantRow={addVariantRow} removeVariantRow={removeVariantRow} updateVariantRow={updateVariantRow}
+      addVariantRow={addVariantRow}
+      removeVariantRow={removeVariantRow}
+      updateVariantRow={updateVariantRow}
       // Media
-      existingImages={existingImages}
-      onRemoveExistingImage={async (mediaId) => {
-        await supabase.from("product_media").delete().eq("id", mediaId);
-        setExistingImages((imgs) => imgs.filter((img) => img.id !== mediaId));
-      }}
-      onReorderExistingImages={(reordered) => setExistingImages(reordered)}
-      setImageFiles={setImageFiles}
+      // Media
+      mediaItems={mediaItems}
+      setMediaItems={setMediaItems}
       setSizeChartFile={setSizeChartFile}
-      setVideoFiles={setVideoFiles}
       // Submit
       handleSubmit={handleSubmit}
       saving={saving}

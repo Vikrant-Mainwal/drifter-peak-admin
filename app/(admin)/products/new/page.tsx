@@ -4,7 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "../../../../lib/supabase/client";
 import { ProductForm } from "../../../../components/admin/ProductForm";
-import type { SpecRow, VariantRow } from "../../../../components/admin/ProductForm";
+import type {
+  SpecRow,
+  VariantRow,
+  MediaItem,
+} from "../../../../components/admin/ProductForm";
 
 export default function NewProductPage() {
   const supabase = createClient();
@@ -41,10 +45,9 @@ export default function NewProductPage() {
     { color: "", size: "", sku: "", stock: "", price: "" },
   ]);
 
-  // Media
-  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  // Media — single ordered list, mixed images + videos
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [sizeChartFile, setSizeChartFile] = useState<File | null>(null);
-  const [videoFiles, setVideoFiles] = useState<File[]>([]);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -55,8 +58,12 @@ export default function NewProductPage() {
     updated[i][field] = value;
     setSpecs(updated);
   }
-  function addSpecRow() { setSpecs([...specs, { label: "", value: "" }]); }
-  function removeSpecRow(i: number) { setSpecs(specs.filter((_, idx) => idx !== i)); }
+  function addSpecRow() {
+    setSpecs([...specs, { label: "", value: "" }]);
+  }
+  function removeSpecRow(i: number) {
+    setSpecs(specs.filter((_, idx) => idx !== i));
+  }
 
   // Variant helpers
   function updateVariantRow(i: number, field: keyof VariantRow, value: string) {
@@ -65,7 +72,10 @@ export default function NewProductPage() {
     setVariants(updated);
   }
   function addVariantRow() {
-    setVariants([...variants, { color: "", size: "", sku: "", stock: "", price: "" }]);
+    setVariants([
+      ...variants,
+      { color: "", size: "", sku: "", stock: "", price: "" },
+    ]);
   }
   function removeVariantRow(i: number) {
     setVariants(variants.filter((_, idx) => idx !== i));
@@ -110,10 +120,16 @@ export default function NewProductPage() {
           ? parseInt(exchangeWindowDays || "0", 10)
           : null,
         tags: tags
-          ? tags.split(",").map((t) => t.trim()).filter(Boolean)
+          ? tags
+              .split(",")
+              .map((t) => t.trim())
+              .filter(Boolean)
           : null,
         keywords: keywords
-          ? keywords.split(",").map((k) => k.trim()).filter(Boolean)
+          ? keywords
+              .split(",")
+              .map((k) => k.trim())
+              .filter(Boolean)
           : null,
         is_active: false, // starts hidden until ready
       })
@@ -138,29 +154,49 @@ export default function NewProductPage() {
           size: v.size || null,
           stock: parseInt(v.stock || "0", 10),
           price: v.price ? parseFloat(v.price) : null,
-        }))
+        })),
       );
     }
 
-    // 3. Upload images
-    for (const file of imageFiles) {
-      const filePath = `${productId}/${Date.now()}_${file.name}`;
+    // 3. Upload media in order — every item here is "new" on create
+    const resolvedMedia: {
+      url: string;
+      media_type: "image" | "video";
+      sort_order: number;
+    }[] = [];
+
+    for (let i = 0; i < mediaItems.length; i++) {
+      const item = mediaItems[i];
+      if (item.kind !== "new") continue;
+
+      const filePath = `${productId}/${item.type}_${Date.now()}_${item.file.name}`;
       const { error: uploadError } = await supabase.storage
         .from("products")
-        .upload(filePath, file);
+        .upload(filePath, item.file);
       if (uploadError) continue;
 
       const { data: urlData } = supabase.storage
         .from("products")
         .getPublicUrl(filePath);
-      await supabase.from("product_media").insert({
-        product_id: productId,
-        media_type: "image",
+      resolvedMedia.push({
         url: urlData.publicUrl,
+        media_type: item.type,
+        sort_order: i,
       });
     }
 
-    // 4. Upload size chart
+    if (resolvedMedia.length > 0) {
+      await supabase.from("product_media").insert(
+        resolvedMedia.map((m) => ({
+          product_id: productId,
+          media_type: m.media_type,
+          url: m.url,
+          sort_order: m.sort_order,
+        })),
+      );
+    }
+
+    // 4. Upload size chart and attach to the new product
     if (sizeChartFile) {
       const filePath = `${productId}/size_chart_${Date.now()}_${sizeChartFile.name}`;
       const { error: uploadError } = await supabase.storage
@@ -170,30 +206,11 @@ export default function NewProductPage() {
         const { data: urlData } = supabase.storage
           .from("products")
           .getPublicUrl(filePath);
-        await supabase.from("products").insert({
-          product_id: productId,
-          media_type: "size_chart",
-          url: urlData.publicUrl,
-        });
+        await supabase
+          .from("products")
+          .update({ size_chart_url: urlData.publicUrl })
+          .eq("id", productId);
       }
-    }
-
-    // 5. Upload videos
-    for (const file of videoFiles) {
-      const filePath = `${productId}/video_${Date.now()}_${file.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from("products")
-        .upload(filePath, file);
-      if (uploadError) continue;
-
-      const { data: urlData } = supabase.storage
-        .from("products")
-        .getPublicUrl(filePath);
-      await supabase.from("product_media").insert({
-        product_id: productId,
-        media_type: "video",
-        url: urlData.publicUrl,
-      });
     }
 
     setSaving(false);
@@ -203,35 +220,54 @@ export default function NewProductPage() {
   return (
     <ProductForm
       // Basic info
-      listTitle={listTitle} setListTitle={setListTitle}
-      detailTitle={detailTitle} setDetailTitle={setDetailTitle}
-      slogan={slogan} setSlogan={setSlogan}
-      description={description} setDescription={setDescription}
-      brand={brand} setBrand={setBrand}
+      listTitle={listTitle}
+      setListTitle={setListTitle}
+      detailTitle={detailTitle}
+      setDetailTitle={setDetailTitle}
+      slogan={slogan}
+      setSlogan={setSlogan}
+      description={description}
+      setDescription={setDescription}
+      brand={brand}
+      setBrand={setBrand}
       // Categorisation
-      gender={gender} setGender={setGender}
-      category={category} setCategory={setCategory}
-      subcategory={subcategory} setSubcategory={setSubcategory}
+      gender={gender}
+      setGender={setGender}
+      category={category}
+      setCategory={setCategory}
+      subcategory={subcategory}
+      setSubcategory={setSubcategory}
       // Pricing
-      mrp={mrp} setMrp={setMrp}
-      sellingPrice={sellingPrice} setSellingPrice={setSellingPrice}
+      mrp={mrp}
+      setMrp={setMrp}
+      sellingPrice={sellingPrice}
+      setSellingPrice={setSellingPrice}
       // Policies
-      isReturnable={isReturnable} setIsReturnable={setIsReturnable}
-      isExchangeable={isExchangeable} setIsExchangeable={setIsExchangeable}
-      exchangeWindowDays={exchangeWindowDays} setExchangeWindowDays={setExchangeWindowDays}
+      isReturnable={isReturnable}
+      setIsReturnable={setIsReturnable}
+      isExchangeable={isExchangeable}
+      setIsExchangeable={setIsExchangeable}
+      exchangeWindowDays={exchangeWindowDays}
+      setExchangeWindowDays={setExchangeWindowDays}
       // Tags
-      tags={tags} setTags={setTags}
-      keywords={keywords} setKeywords={setKeywords}
+      tags={tags}
+      setTags={setTags}
+      keywords={keywords}
+      setKeywords={setKeywords}
       // Specs
       specs={specs}
-      addSpecRow={addSpecRow} removeSpecRow={removeSpecRow} updateSpecRow={updateSpecRow}
+      addSpecRow={addSpecRow}
+      removeSpecRow={removeSpecRow}
+      updateSpecRow={updateSpecRow}
       // Variants
       variants={variants}
-      addVariantRow={addVariantRow} removeVariantRow={removeVariantRow} updateVariantRow={updateVariantRow}
-      // Media — no existingImages on create
-      setImageFiles={setImageFiles}
+      addVariantRow={addVariantRow}
+      removeVariantRow={removeVariantRow}
+      updateVariantRow={updateVariantRow}
+      // Media — empty list to start, nothing "existing" on create
+      mediaItems={mediaItems}
+      setMediaItems={setMediaItems}
       setSizeChartFile={setSizeChartFile}
-      setVideoFiles={setVideoFiles}
       // Submit
       handleSubmit={handleSubmit}
       saving={saving}
